@@ -2,7 +2,9 @@ from coloredcoinlib.store import DataStore, DataStoreConnection
 from time import time
 import sqlite3
 import urllib2
+import electrum
 import json
+import Queue
 
 class UTXOStore(DataStore):
     def __init__(self, dbpath):
@@ -97,7 +99,6 @@ class UTXO(object):
         return (le_txhash, self.outindex, pycoin_txout)
 
 class UTXOFetcher(object):
-    """ Fetches UTXO's for specific address"""
     def get_for_address(self, address):
         url = "http://blockchain.info/unspent?active=%s" % address
         try:
@@ -108,7 +109,8 @@ class UTXOFetcher(object):
                 txhash = utxo_data['tx_hash'].decode('hex')[::-1].encode('hex')
                 utxo = UTXO(txhash, utxo_data['tx_output_n'], utxo_data['value'], utxo_data['script'])
                 utxos.append(utxo)
-                return utxos
+                print(repr((address, utxo.txhash, utxo.outindex, utxo.value, utxo.script)))
+            return utxos
         except urllib2.HTTPError as e:
             if e.code == 500:
                 return []
@@ -147,3 +149,4 @@ class UTXOManager(object):
         for address in wam.get_all_addresses():
             self.update_address(address)
 
+        self.utxo_fetcher.get_for_address('3BTChqkFai51wFwrHSVdvSW9cPXifrJ7jC')
