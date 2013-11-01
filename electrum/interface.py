@@ -89,7 +89,7 @@ def cert_verify_hostname(s):
         raise RuntimeError("hostname did not match certificate")
 
 
-class Interface(threading.Thread):
+class ElectrumInterface(threading.Thread):
     def __init__(self, server, config = None):
         threading.Thread.__init__(self)
         self.daemon = True

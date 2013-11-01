@@ -1,10 +1,11 @@
 from coloredcoinlib.store import DataStore, DataStoreConnection
 from time import time
+import bitcoin.core
 import sqlite3
 import urllib2
-import electrum
 import json
 import Queue
+from electrum.interface import ElectrumInterface, pick_random_server
 
 class UTXOStore(DataStore):
     def __init__(self, dbpath):
@@ -98,7 +99,7 @@ class UTXO(object):
         pycoin_txout = pycoin.tx.TxOut(self.value, self.script.decode('hex'))
         return (le_txhash, self.outindex, pycoin_txout)
 
-class UTXOFetcher(object):
+class UTXOFetcherBCI(object):
     def get_for_address(self, address):
         url = "http://blockchain.info/unspent?active=%s" % address
         try:
@@ -109,7 +110,6 @@ class UTXOFetcher(object):
                 txhash = utxo_data['tx_hash'].decode('hex')[::-1].encode('hex')
                 utxo = UTXO(txhash, utxo_data['tx_output_n'], utxo_data['value'], utxo_data['script'])
                 utxos.append(utxo)
-                print(repr((address, utxo.txhash, utxo.outindex, utxo.value, utxo.script)))
             return utxos
         except urllib2.HTTPError as e:
             if e.code == 500:
@@ -117,12 +117,43 @@ class UTXOFetcher(object):
             else:
                 raise
 
+class UTXOFetcherElectrum(object):
+    def __init__(self, interface):
+        self.interface = interface
+
+    def get_for_address(self, address):
+        req = ('blockchain.address.get_history', [address])
+        history = self.interface.synchronous_get([ req ])[0]
+        script_pubkey =  bitcoin.core.CBitcoinAddress(address).to_scriptPubKey()
+
+        reqs = []
+        for x in history:
+            reqs += [('blockchain.transaction.get', [x['tx_hash'], x['height']])]
+        tx_hexes = self.interface.synchronous_get(reqs)
+
+        spent = {}
+        utxos = []
+        for tx_hex, hist_entry in zip(tx_hexes, history):
+            tx = bitcoin.core.CTransaction.deserialize(bitcoin.core.x(tx_hex))
+            for vin in tx.vin:
+                spent[(bitcoin.core.b2lx(vin.prevout.hash), vin.prevout.n)] = 1
+            for outindex, vout in enumerate(tx.vout):
+                # FIXME: handle other transaction types
+                if vout.scriptPubKey != script_pubkey:
+                    continue
+                utxos += [UTXO(hist_entry['tx_hash'], outindex, vout.nValue,
+                    bitcoin.core.b2x(vout.scriptPubKey))]
+
+        return [u for u in utxos if not (u.txhash, u.outindex) in spent]
+
 class UTXOManager(object):
     def __init__(self, model, config):
         params = config.get('utxodb', {})
         self.model = model
         self.store = UTXOStore(params.get('dbpath', "utxo.db"))
-        self.utxo_fetcher = UTXOFetcher()
+        elect = ElectrumInterface(pick_random_server())
+        elect.start(None, True)
+        self.utxo_fetcher = UTXOFetcherElectrum(elect)
 
     def get_utxos_for_address(self, address):
         utxos = []
